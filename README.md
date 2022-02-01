@@ -1,1 +1,2 @@
-# chandy-lamport
+# Chandy Lamport Global Snapshot
+

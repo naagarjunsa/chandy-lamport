@@ -1,0 +1,24 @@
+{
+    "clients" : {
+      "A": {
+        "server_host": "127.0.0.1",
+        "server_port": 65438,
+        "connected_to": ["B"]
+      },
+      "B": {
+        "server_host": "127.0.0.1",
+        "server_port": 65439,
+        "connected_to": ["A", "D"]
+      },
+      "C": {
+        "server_host": "127.0.0.1",
+        "server_port": 65440,
+        "connected_to": ["B"]
+      },
+      "D": {
+        "server_host": "127.0.0.1",
+        "server_port": 65441,
+        "connected_to": ["A", "B", "C"]
+      }
+    }
+  }

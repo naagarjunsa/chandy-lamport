@@ -1,0 +1,86 @@
+
+- network connectivity graph represented by "connected_to" feild in the config file.
+- each client will connect to each other client, message passing will take care of blockages.
+- thread structure:
+    - one thread to take input of the user
+    - one thread to handle the main application work - transaction thread
+    - one thread to handle the snapshot work - snapshot thread
+    - one thread to listen to all the incoming messages - server thread
+
+
+User flows : 
+    a. sending money logic flow;
+
+        (sender side)
+        ui thread will take i/p  -> 
+        put an event dict in the transaction_thread_queue -> 
+        transaction_thread consumes event -> 
+        does recv_iud check, amount check(lock cause balance loool) -> 
+        if yes send request to peer using conn dict
+
+        (reciever side)
+        server will get the request -> 
+        update the balance and chill (lock before you do!)
+
+    b. checking balance logic flow;
+
+        ui thread will take i/p ->
+        put an event dict in the transaction_thread_queue ->
+        print the balance (lock before you do!)
+    
+    c. initate snapshot!
+
+        (initator side)
+        ui thread will take i/p->
+        put an event dict in the snapshot_thread_queue ->
+        assign an id to the initator ->
+        create snapshot dict (see below)(final dict to print snapshots) -> 
+        create partial_snapshot dict (see below) -> update accordingly 
+
+    server has to handle three type of messages -> transaction, markers and partial_snapshots
+    
+    -> events are either partial_snapshots or markers
+        -> markers are just sent to set the state
+        -> partial_snapshots are sent to initator to update its final snapshot picture
+
+    -> create a partial_snapshot of the initator when it inits a snapshot
+    -> after it gets N-1 markers add that partial_snapshot to snapshot
+
+
+    partial_snapshot dict feature -> snapshot_id : marker_count -> int
+                                                   local_state -> int
+                                                   channel_state : A -> []
+                                                                   B -> []
+                                                                   C -> []
+                                                                   D -> []
+                                                    marker_recvd : A -> bool
+                                                                   B -> bool
+                                                                   C -> bool
+                                                                   D -> bool
+    
+    snapshot dict feature -> snapshot_id : snapshot_count (how many partial_snapshot it got ; others will send, initator will update when it gets all markers)
+                                           A : local_state -> int
+                                               channel_state : A -> []
+                                                               B -> []
+                                                               C -> []
+                                                               D -> []
+                                                snapshot_revd -> bool
+                                            B : local_state -> int
+                                               channel_state : A -> []
+                                                               B -> []
+                                                               C -> []
+                                                               D -> []
+                                                snapshot_revd -> bool
+                                            C : local_state -> int
+                                               channel_state : A -> []
+                                                               B -> []
+                                                               C -> []
+                                                               D -> []
+                                                snapshot_revd -> bool
+                                            D : local_state -> int
+                                               channel_state : A -> []
+                                                               B -> []
+                                                               C -> []
+                                                               D -> []
+                                                snapshot_revd -> bool
+
