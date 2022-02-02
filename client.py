@@ -31,10 +31,12 @@ class Event(enum.Enum):
     PARTIAL_SNAPSHOT = 4
     BROADCAST_MARKER = 5
     UPDATE_CHANNEL_STATE = 6
+    EOM = 7
 
 
 class Client:
     INIT_BALANCE = 10
+    EOM_IN_BYTES = pickle.dumps(Event.EOM)
 
     def __init__(self, client_id, clients_info):
         # parameter vars
@@ -47,12 +49,12 @@ class Client:
         # global vars
         self.transaction_thread_queue = Queue()
         self.snapshot_thread_queue = Queue()
-        self.lock = threading.Lock()
+        self.balance_lock = threading.Lock()
         self.server_flag = threading.Event()
         self.server_flag.set()
         self.balance = Client.INIT_BALANCE
-        self.partial_snapshots: Dict[str: Snapshot] = dict()
-        self.global_snapshots: Dict[str: GlobalSnapshot] = dict()
+        self.partial_snapshots_dict: Dict[str: Snapshot] = dict()
+        self.global_snapshots_dict: Dict[str: GlobalSnapshot] = dict()
         self.snapshot_id = 0
 
         # start the client's peer server
@@ -99,12 +101,12 @@ class Client:
 
     @staticmethod
     def get_request_list(data):
-        byte_message_list = data.split(b'.')
+        byte_message_list = data.split(Client.EOM_IN_BYTES)
         req_list = []
         for msg in byte_message_list:
             if not msg:
                 continue
-            req = pickle.loads(msg + b'.')
+            req = pickle.loads(msg)
             req_list.append(req)
         return req_list
 
@@ -137,15 +139,15 @@ class Client:
 
         # check if update the balance and send only if sufficient balance
         send_request_flag = True
-        self.lock.acquire()
+        self.balance_lock.acquire()
         if amount > self.balance:
             logger.info("INSUFFICIENT BALANCE")
             send_request_flag = False
         else:
             self.balance -= amount
-        self.lock.release()
+        self.balance_lock.release()
 
-        # send request to reciever id peer if enough balance
+        # send request to receiver id peer if enough balance
         if send_request_flag:
             request = {"type": Event.TRANSACTION, "sender_id": self.client_id, "amount": amount}
             self.send_transaction_request(receiver_id, request)
@@ -154,22 +156,20 @@ class Client:
         # time to sleep; cause life
         time.sleep(3)
 
-        self.lock.acquire()
-        self.peer_conn_info[receiver_id].sendall(pickle.dumps(request))
+        self.peer_conn_info[receiver_id].sendall(pickle.dumps(request) + pickle.dumps(Event.EOM))
         logger.info(f"Transaction message sent to client {receiver_id} : " + str(request))
-        self.lock.release()
+
 
     def handle_balance(self):
-        self.lock.acquire()
+        self.balance_lock.acquire()
         logger.info(f"Current Balance is : ${self.balance}")
-        self.lock.release()
+        self.balance_lock.release()
 
     def start_transaction_thread(self):
 
         while True:
             if not self.transaction_thread_queue.empty():
                 event = self.transaction_thread_queue.get()
-
                 if event["type"] == "transaction":
                     self.handle_transaction(event)
                 elif event["type"] == "balance":
@@ -187,14 +187,13 @@ class Client:
 
         # create an entry in the snapshot dict with this curr_snapshot_id as key
         # lock needed as server thread also accesses this map
-        self.lock.acquire()
-        self.global_snapshots[curr_snapshot_id] = GlobalSnapshot(curr_snapshot_id)
-        self.partial_snapshots[curr_snapshot_id] = Snapshot(self.balance, self.client_id, curr_snapshot_id,
-                                                            self.client_id, self.clients_info.keys())
+
+        self.global_snapshots_dict[curr_snapshot_id] = GlobalSnapshot(curr_snapshot_id)
+        self.partial_snapshots_dict[curr_snapshot_id] = Snapshot(self.balance, self.client_id, curr_snapshot_id,
+                                                                 self.client_id, self.clients_info.keys())
 
         # need to record all incoming messages in server side and add to self.client_id channel state
-        # taken care of in this method -> {add method name here}
-        self.lock.release()
+        # taken care of in this method -> {update_channel_state_for_all_snapshots}
 
         # send markers to all peers
         self.broadcast_marker_request(snapshot_id=curr_snapshot_id, initiator_id=self.client_id)
@@ -212,18 +211,17 @@ class Client:
             time.sleep(3)
             # TODO: Why  is lock needed here ?
             # self.lock.acquire()
-            conn.sendall(pickle.dumps(request))
+            conn.sendall(pickle.dumps(request) + pickle.dumps(Event.EOM))
             logger.info(f"Marker sent to client {peer_id} : " + str(request))
             # self.lock.release()
 
     def update_channel_state_for_all_snapshots(self, req):
-        self.lock.acquire()
+
         sender_id = req["sender_id"]
-        for snapshot_id, partial_snapshot in self.partial_snapshots.items():
+        for snapshot_id, partial_snapshot in self.partial_snapshots_dict.items():
             if not partial_snapshot.channel_state_dict[sender_id].marker_received:
                 partial_snapshot.channel_state_dict[sender_id].messages.append(req)
                 logger.debug(f"State updated for snapshot_id : {snapshot_id} , channel_id : {sender_id}")
-        self.lock.release()
 
     def start_snapshot_thread(self):
         while True:
@@ -286,7 +284,6 @@ class Client:
                 self.transaction_thread_queue.put({"type": "quit"})
                 self.snapshot_thread_queue.put({"type": "quit"})
                 self.server_flag.clear()
-                self.start_snapshot_thread()
                 logger.info("Until next time...")
                 break
             else:
@@ -311,10 +308,10 @@ class Client:
         if req["type"] == Event.TRANSACTION:
             amount = req["amount"]
             # process the message this will happen irrespective of snapshot
-            self.lock.acquire()
+            self.balance_lock.acquire()
             self.balance += amount
             logger.info(f"Balance updated to : ${self.balance}")
-            self.lock.release()
+            self.balance_lock.release()
             self.snapshot_thread_queue.put({"type": Event.UPDATE_CHANNEL_STATE, "request": req})
             # logic to store the messages in partial snapshots based on marker values in the snapshot
         elif req["type"] == Event.MARKER:
@@ -332,26 +329,24 @@ class Client:
         initiator_id = req["initiator_id"]
 
         # TODO : handle locking
-        # acquire lock cause working with global vars
-        # self.lock.acquire()
+        # lock not needed as all the snapshot stuff is handled by this thread alone
 
         # check if the partial map has entry of that snapshot_id and then create new one, case with the first marker
-        if snapshot_id not in self.partial_snapshots:
+        if snapshot_id not in self.partial_snapshots_dict:
             logger.debug(f"creating new snapshot for snapshot id : {snapshot_id}")
             # 2.3.1.2 -> record local state
-            self.partial_snapshots[snapshot_id] = Snapshot(self.balance, initiator_id, snapshot_id, self.client_id,
-                                                           self.clients_info.keys())
+            self.partial_snapshots_dict[snapshot_id] = Snapshot(self.balance, initiator_id, snapshot_id, self.client_id,
+                                                                self.clients_info.keys())
             # 2.3.1.3 -> send marker to all other channels
             self.broadcast_marker_request(snapshot_id=snapshot_id, initiator_id=initiator_id)
 
-        cur_partial_snapshot: Snapshot = self.partial_snapshots[snapshot_id]
+        cur_partial_snapshot: Snapshot = self.partial_snapshots_dict[snapshot_id]
         cur_partial_snapshot.channel_state_dict[sender_id].marker_received = True
         cur_partial_snapshot.marker_count += 1
 
         # 2.4.1 -> if all markers are recvd for that snapshot_id
         if cur_partial_snapshot.marker_count == len(self.incoming_client_id_list):
             self.send_partial_snapshot(initiator_id, cur_partial_snapshot)
-        # self.lock.release()
 
     def send_partial_snapshot(self, initiator_id, partial_snapshot):
 
@@ -364,18 +359,16 @@ class Client:
         # time to sleep; cause life
         time.sleep(3)
 
-        self.lock.acquire()
-        self.peer_conn_info[initiator_id].sendall(pickle.dumps(request))
+        self.peer_conn_info[initiator_id].sendall(pickle.dumps(request) + pickle.dumps(Event.EOM))
         logger.info(f"Partial snapshot sent to client {initiator_id} : " + str(request))
         # Delete the partial snapshot once sent to the initiator.
         # let the garbage collector take care of the original object
-        del self.partial_snapshots[request["partial_snapshot"].snapshot_id]
-        self.lock.release()
+        del self.partial_snapshots_dict[request["partial_snapshot"].snapshot_id]
 
     def handle_partial_snapshot(self, request):
         partial_snapshot: Snapshot = request["partial_snapshot"]
         sender_id = request["sender_id"]
-        cur_global_snapshot = self.global_snapshots[partial_snapshot.snapshot_id]
+        cur_global_snapshot = self.global_snapshots_dict[partial_snapshot.snapshot_id]
         cur_global_snapshot.partial_snapshots[sender_id] = partial_snapshot
         cur_global_snapshot.snapshot_count += 1
         if cur_global_snapshot.snapshot_count == len(clients_info):
