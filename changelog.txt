@@ -1,5 +1,5 @@
 
-- network connectivity graph represented by "connected_to" feild in the config file.
+- network connectivity graph represented by "connected_to" field in the config file.
 - each client will connect to each other client, message passing will take care of blockages.
 - thread structure:
     - one thread to take input of the user
@@ -84,3 +84,11 @@ User flows :
                                                                D -> []
                                                 snapshot_revd -> bool
 
+
+
+--------
+We need to do reverse lookup of the connected_to list to get the expected count of markers on the receiving channels.
+Need to handle the case when multiple messages arrive at the socket, since we are now using pickle. - done
+Handled the case when the first marker is the last marker we are expecting
+Maintaining an Enum Event for all event types.
+lets connect to our own client as well, just to simplify the logic.
