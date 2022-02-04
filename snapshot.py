@@ -34,10 +34,11 @@ class Snapshot:
         output_str_list = []
         output_str_list.append(f"Client id : {self.client_id}")
         output_str_list.append(f"Local state :")
-        output_str_list.append(f"{self.local_state}")
+        output_str_list.append(f"   {self.local_state}")
         output_str_list.append("Channel states :")
-        for client_id, channel_state in self.channel_state_dict.items():
-            output_str_list.append(f"{client_id} : {channel_state}")
+        for client_id in sorted(self.channel_state_dict):
+            channel_state = self.channel_state_dict[client_id]
+            output_str_list.append(f"   {client_id} : {channel_state}")
         return "\n".join(output_str_list) + "\n"
 
 
@@ -52,7 +53,8 @@ class GlobalSnapshot:
     def __repr__(self):
         output_str_list = []
         output_str_list.append(f"Snapshot id : {self.snapshot_id}")
-        for client_id, partial_snapshot in self.partial_snapshots.items():
+        for client_id in sorted(self.partial_snapshots.keys()):
+            partial_snapshot = self.partial_snapshots[client_id]
             output_str_list.append("=====================================================")
             output_str_list.append(f"{partial_snapshot}")
             output_str_list.append("=====================================================")
