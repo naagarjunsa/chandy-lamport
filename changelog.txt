@@ -93,3 +93,13 @@ Handled the case when the first marker is the last marker we are expecting
 Maintaining an Enum Event for all event types.
 lets connect to our own client as well, just to simplify the logic.
 When initiating a new snapshot, the current balance should be recorded immediately, to avoid discrepancy.
+
+Test cases :
+#1
+C,D : initiate snapshot
+A sends $2  to B
+
+
+#2
+C,D : initiate snapshot
+B sends $2 to D
