@@ -151,6 +151,7 @@ class Client:
         if send_request_flag:
             request = {"type": Event.TRANSACTION, "sender_id": self.client_id, "amount": amount}
             self.send_transaction_request(receiver_id, request)
+            logger.info("SUCCESS")
 
     def send_transaction_request(self, receiver_id, request):
         # time to sleep; cause life
@@ -158,7 +159,6 @@ class Client:
 
         self.peer_conn_info[receiver_id].sendall(pickle.dumps(request) + pickle.dumps(Event.EOM))
         logger.info(f"Transaction message sent to client {receiver_id} : " + str(request))
-
 
     def handle_balance(self):
         self.balance_lock.acquire()
@@ -179,7 +179,7 @@ class Client:
                 else:
                     logger.info("Invalid event to transaction thread")
 
-    def init_snapshot(self):
+    def init_snapshot(self, snapshot_balance):
 
         # update the counter of the snapshot; no need of lock as the only place of usage
         self.snapshot_id += 1
@@ -189,8 +189,8 @@ class Client:
         # lock needed as server thread also accesses this map
 
         self.global_snapshots_dict[curr_snapshot_id] = GlobalSnapshot(curr_snapshot_id)
-        self.partial_snapshots_dict[curr_snapshot_id] = Snapshot(self.balance, self.client_id, curr_snapshot_id,
-                                                                 self.client_id, self.clients_info.keys())
+        self.partial_snapshots_dict[curr_snapshot_id] = Snapshot(snapshot_balance, self.client_id, curr_snapshot_id,
+                                                                 self.client_id, self.incoming_client_id_list)
 
         # need to record all incoming messages in server side and add to self.client_id channel state
         # taken care of in this method -> {update_channel_state_for_all_snapshots}
@@ -206,9 +206,11 @@ class Client:
                    "initiator_id": initiator_id,
                    "sender_id": self.client_id}
 
+        time.sleep(3)
+
         for peer_id in self.clients_info[self.client_id]["connected_to"]:
             conn = self.peer_conn_info[peer_id]
-            time.sleep(3)
+
             # TODO: Why  is lock needed here ?
             # self.lock.acquire()
             conn.sendall(pickle.dumps(request) + pickle.dumps(Event.EOM))
@@ -228,9 +230,9 @@ class Client:
             if not self.snapshot_thread_queue.empty():
                 event = self.snapshot_thread_queue.get()
                 if event["type"] == Event.INIT_SNAPSHOT:
-                    self.init_snapshot()
+                    self.init_snapshot(event["balance"])
                 elif event["type"] == Event.MARKER:
-                    self.handle_marker(event["request"])
+                    self.handle_marker(event)
                 elif event["type"] == Event.UPDATE_CHANNEL_STATE:
                     self.update_channel_state_for_all_snapshots(event["request"])
                 elif event["type"] == Event.PARTIAL_SNAPSHOT:
@@ -279,7 +281,7 @@ class Client:
                 self.transaction_thread_queue.put({"type": "balance"})
             elif user_input == "3":
                 # tell the snapshot thread by adding the event into the snapshot queue
-                self.snapshot_thread_queue.put({"type": Event.INIT_SNAPSHOT})
+                self.snapshot_thread_queue.put({"type": Event.INIT_SNAPSHOT, "balance":self.balance})
             elif user_input == "4":
                 self.transaction_thread_queue.put({"type": "quit"})
                 self.snapshot_thread_queue.put({"type": "quit"})
@@ -315,18 +317,20 @@ class Client:
             self.snapshot_thread_queue.put({"type": Event.UPDATE_CHANNEL_STATE, "request": req})
             # logic to store the messages in partial snapshots based on marker values in the snapshot
         elif req["type"] == Event.MARKER:
-            self.snapshot_thread_queue.put({"type": Event.MARKER, "request": req})
+            self.snapshot_thread_queue.put({"type": Event.MARKER, "request": req, "balance": self.balance})
             self.snapshot_thread_queue.put({"type": Event.UPDATE_CHANNEL_STATE, "request": req})
         elif req["type"] == Event.PARTIAL_SNAPSHOT:
             self.snapshot_thread_queue.put({"type": Event.PARTIAL_SNAPSHOT, "request": req})
         else:
             logger.info(f"Invalid request type to the server {req}")
 
-    def handle_marker(self, req):
+    def handle_marker(self, event):
 
+        req = event["request"]
         snapshot_id = req["snapshot_id"]
         sender_id = req["sender_id"]
         initiator_id = req["initiator_id"]
+        snapshot_balance = event["balance"]
 
         # TODO : handle locking
         # lock not needed as all the snapshot stuff is handled by this thread alone
@@ -335,8 +339,8 @@ class Client:
         if snapshot_id not in self.partial_snapshots_dict:
             logger.debug(f"creating new snapshot for snapshot id : {snapshot_id}")
             # 2.3.1.2 -> record local state
-            self.partial_snapshots_dict[snapshot_id] = Snapshot(self.balance, initiator_id, snapshot_id, self.client_id,
-                                                                self.clients_info.keys())
+            self.partial_snapshots_dict[snapshot_id] = Snapshot(snapshot_balance, initiator_id, snapshot_id, self.client_id,
+                                                                self.incoming_client_id_list)
             # 2.3.1.3 -> send marker to all other channels
             self.broadcast_marker_request(snapshot_id=snapshot_id, initiator_id=initiator_id)
 
